@@ -1,0 +1,27 @@
+appId: com.heima.accounting
+productName: 黑马记账
+directories:
+  output: release
+  buildResources: resources
+files:
+  - dist/**/*
+  - package.json
+asarUnpack:
+  - node_modules/sql.js/**/*
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-Setup-${version}-Windows.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  artifactName: ${productName}-${version}-macOS.${ext}

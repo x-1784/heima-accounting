@@ -1,0 +1,44 @@
+{
+  "name": "heima-accounting",
+  "version": "1.0.0",
+  "description": "黑马记账 — 个人记账桌面应用",
+  "main": "dist/main/index.js",
+  "author": "黑马记账",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -n main,renderer \"npm run dev:main\" \"npm run dev:renderer\"",
+    "dev:main": "tsc -p tsconfig.node.json && env -u ELECTRON_RUN_AS_NODE electron .",
+    "dev:renderer": "vite",
+    "build": "npm run build:renderer && npm run build:main",
+    "build:main": "tsc -p tsconfig.node.json",
+    "build:renderer": "vite build",
+    "pack:win": "npm run build && electron-builder --win",
+    "pack:mac": "npm run build && electron-builder --mac",
+    "pack:all": "npm run build && electron-builder --win --mac"
+  },
+  "dependencies": {
+    "@ant-design/charts": "^2.6.7",
+    "@ant-design/icons": "^5.5.0",
+    "antd": "^5.22.0",
+    "dayjs": "^1.11.13",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sql.js": "^1.11.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "adm-zip": "^0.6.0",
+    "concurrently": "^9.1.0",
+    "cross-env": "^10.1.0",
+    "electron": "^37.10.3",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "electron@37.10.3": true
+  }
+}
