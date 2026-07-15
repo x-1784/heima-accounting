@@ -13,7 +13,7 @@ win:
     - target: nsis
       arch:
         - x64
-  artifactName: ${productName}-Setup-${version}-Windows.${ext}
+  artifactName: heima-accounting-Setup-${version}-Windows.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
@@ -25,3 +25,7 @@ mac:
         - x64
         - arm64
   artifactName: ${productName}-${version}-macOS.${ext}
+publish:
+  provider: github
+  owner: x-1784
+  repo: heima-accounting

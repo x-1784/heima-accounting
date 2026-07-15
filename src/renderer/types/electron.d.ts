@@ -15,6 +15,15 @@ interface CategoryStat {
   total: number
 }
 
+/** 用户自定义分类 */
+interface UserCategory {
+  id: number
+  category_l1: string
+  emoji: string
+  children: string[]
+  created_at: string
+}
+
 /** Electron API 类型定义 */
 interface ElectronAPI {
   getExpenses: (month?: string) => Promise<ExpenseRecord[]>
@@ -40,6 +49,22 @@ interface ElectronAPI {
   exportCSV: (month?: string) => Promise<{ success: boolean; path: string | null }>
   getBudget: (month: string) => Promise<{ month: string; amount: number } | null>
   setBudget: (month: string, amount: number) => Promise<{ success: boolean }>
+
+  // ========== 分类管理 ==========
+  getUserCategories: () => Promise<UserCategory[]>
+  addUserCategory: (data: { category_l1: string; emoji?: string; children: string[] }) => Promise<{ success: boolean; message?: string }>
+  updateUserCategory: (data: { id: number; category_l1?: string; emoji?: string; children?: string[] }) => Promise<{ success: boolean; message?: string }>
+  deleteUserCategory: (id: number) => Promise<{ success: boolean }>
+
+  // ========== 自动更新 ==========
+  onUpdateAvailable: (callback: (info: { version: string }) => void) => void
+  onUpdateNotAvailable: (callback: (info: any) => void) => void
+  onDownloadProgress: (callback: (progress: { percent: number }) => void) => void
+  onUpdateDownloaded: (callback: (info: { version: string }) => void) => void
+  onUpdateError: (callback: (message: string) => void) => void
+  checkForUpdates: () => Promise<any>
+  downloadUpdate: () => Promise<{ success: boolean; message?: string }>
+  installUpdate: () => Promise<{ success: boolean }>
 }
 
 declare global {

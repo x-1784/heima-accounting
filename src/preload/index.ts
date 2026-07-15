@@ -60,4 +60,56 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** 设置某月的预算 */
   setBudget: (month: string, amount: number) => ipcRenderer.invoke('budget:set', month, amount),
+
+  // ========== 自动更新 ==========
+
+  /** 监听：发现新版本 */
+  onUpdateAvailable: (callback: (info: any) => void) => {
+    ipcRenderer.on('update:available', (_event, info) => callback(info))
+  },
+
+  /** 监听：无新版本 */
+  onUpdateNotAvailable: (callback: (info: any) => void) => {
+    ipcRenderer.on('update:not-available', (_event, info) => callback(info))
+  },
+
+  /** 监听：下载进度 */
+  onDownloadProgress: (callback: (progress: { percent: number }) => void) => {
+    ipcRenderer.on('update:download-progress', (_event, progress) => callback(progress))
+  },
+
+  /** 监听：下载完成 */
+  onUpdateDownloaded: (callback: (info: any) => void) => {
+    ipcRenderer.on('update:downloaded', (_event, info) => callback(info))
+  },
+
+  /** 监听：更新出错 */
+  onUpdateError: (callback: (message: string) => void) => {
+    ipcRenderer.on('update:error', (_event, message) => callback(message))
+  },
+
+  /** 手动检查更新 */
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+
+  /** 开始下载更新 */
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+
+  /** 安装更新并重启 */
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+
+  // ========== 分类管理 ==========
+
+  /** 获取所有用户自定义分类 */
+  getUserCategories: () => ipcRenderer.invoke('category:getAll'),
+
+  /** 添加用户自定义分类 */
+  addUserCategory: (data: { category_l1: string; emoji?: string; children: string[] }) =>
+    ipcRenderer.invoke('category:add', data),
+
+  /** 更新用户自定义分类 */
+  updateUserCategory: (data: { id: number; category_l1?: string; emoji?: string; children?: string[] }) =>
+    ipcRenderer.invoke('category:update', data),
+
+  /** 删除用户自定义分类 */
+  deleteUserCategory: (id: number) => ipcRenderer.invoke('category:delete', id),
 })

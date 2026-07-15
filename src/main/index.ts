@@ -1,6 +1,7 @@
 import electron = require('electron')
 import path = require('path')
 import { initDatabase, getDB } from './database'
+import { autoUpdater } from 'electron-updater'
 
 const { app, BrowserWindow, ipcMain, dialog } = electron
 
@@ -265,6 +266,183 @@ function setupIPC() {
     saveDatabase()
     return { success: true }
   })
+
+  // ========== 用户自定义分类 CRUD ==========
+
+  const PRESET_CATEGORY_NAMES = [
+    '餐饮美食', '交通出行', '购物消费', '住房居家', '休闲娱乐',
+    '医疗健康', '教育学习', '金融理财', '家庭生活', '其他支出',
+  ]
+
+  // 获取所有用户自定义分类
+  ipcMain.handle('category:getAll', async () => {
+    const db = getDB()
+    if (!db) return []
+
+    const results = db.exec('SELECT * FROM user_categories ORDER BY created_at ASC')
+    if (results.length === 0) return []
+
+    const columns: string[] = results[0].columns
+    return results[0].values.map((row: any[]) => {
+      const record: Record<string, any> = {}
+      columns.forEach((col: string, i: number) => {
+        record[col] = row[i]
+      })
+      // 将 children JSON 字符串解析为数组
+      record.children = JSON.parse(record.children || '[]')
+      return record
+    })
+  })
+
+  // 添加用户自定义分类
+  ipcMain.handle(
+    'category:add',
+    async (_event, data: { category_l1: string; emoji?: string; children: string[] }) => {
+      const db = getDB()
+      if (!db) throw new Error('数据库未初始化')
+
+      // 检查重名：与预置分类
+      const normalizedName = data.category_l1.trim()
+      if (!normalizedName) {
+        return { success: false, message: '分类名称不能为空' }
+      }
+      if (PRESET_CATEGORY_NAMES.includes(normalizedName)) {
+        return { success: false, message: `"${normalizedName}"是预置分类，不能重复创建` }
+      }
+
+      // 检查重名：与已有用户分类
+      const existing = db.exec('SELECT id FROM user_categories WHERE category_l1 = ?', [normalizedName])
+      if (existing.length > 0 && existing[0].values.length > 0) {
+        return { success: false, message: `分类"${normalizedName}"已存在` }
+      }
+
+      if (!data.children || data.children.length === 0) {
+        return { success: false, message: '请至少添加一个二级分类' }
+      }
+
+      const now = new Date().toISOString()
+      const emoji = (data.emoji || '📌').trim() || '📌'
+      db.run(
+        'INSERT INTO user_categories (category_l1, emoji, children, created_at) VALUES (?, ?, ?, ?)',
+        [normalizedName, emoji, JSON.stringify(data.children), now]
+      )
+      saveDatabase()
+      return { success: true }
+    }
+  )
+
+  // 更新用户自定义分类
+  ipcMain.handle(
+    'category:update',
+    async (_event, data: { id: number; category_l1?: string; emoji?: string; children?: string[] }) => {
+      const db = getDB()
+      if (!db) throw new Error('数据库未初始化')
+
+      // 获取原记录
+      const old = db.exec('SELECT * FROM user_categories WHERE id = ?', [data.id])
+      if (old.length === 0 || old[0].values.length === 0) {
+        return { success: false, message: '分类不存在' }
+      }
+      const oldRow: any[] = old[0].values[0]
+
+      const newL1 = data.category_l1?.trim()
+      const newEmoji = data.emoji?.trim()
+      const newChildren = data.children
+
+      // 如果改了名称，检查重名
+      if (newL1 && newL1 !== oldRow[1]) {
+        if (PRESET_CATEGORY_NAMES.includes(newL1)) {
+          return { success: false, message: `"${newL1}"是预置分类，不能使用此名称` }
+        }
+        const existing = db.exec('SELECT id FROM user_categories WHERE category_l1 = ? AND id != ?', [newL1, data.id])
+        if (existing.length > 0 && existing[0].values.length > 0) {
+          return { success: false, message: `分类"${newL1}"已存在` }
+        }
+      }
+
+      const finalL1 = newL1 || oldRow[1]
+      const finalEmoji = newEmoji || oldRow[2]
+      const finalChildren = newChildren ? JSON.stringify(newChildren) : oldRow[3]
+
+      if (newChildren !== undefined && newChildren.length === 0) {
+        return { success: false, message: '请至少保留一个二级分类' }
+      }
+
+      db.run(
+        'UPDATE user_categories SET category_l1 = ?, emoji = ?, children = ? WHERE id = ?',
+        [finalL1, finalEmoji, finalChildren, data.id]
+      )
+      saveDatabase()
+      return { success: true }
+    }
+  )
+
+  // 删除用户自定义分类
+  ipcMain.handle('category:delete', async (_event, id: number) => {
+    const db = getDB()
+    if (!db) throw new Error('数据库未初始化')
+
+    db.run('DELETE FROM user_categories WHERE id = ?', [id])
+    saveDatabase()
+    return { success: true }
+  })
+
+  // ========== 自动更新 ==========
+
+  /** 开始下载更新 */
+  ipcMain.handle('update:download', async () => {
+    try {
+      await autoUpdater.downloadUpdate()
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, message: err.message }
+    }
+  })
+
+  /** 安装更新并重启应用 */
+  ipcMain.handle('update:install', async () => {
+    autoUpdater.quitAndInstall()
+    return { success: true }
+  })
+
+  /** 手动检查更新 */
+  ipcMain.handle('update:check', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates()
+      return result
+    } catch (err: any) {
+      throw new Error(err.message)
+    }
+  })
+}
+
+// =================== 自动更新事件转发 ===================
+
+function setupAutoUpdater() {
+  // 发现新版本时通知渲染进程
+  autoUpdater.on('update-available', (info) => {
+    mainWindow?.webContents.send('update:available', info)
+  })
+
+  // 没有新版本时通知
+  autoUpdater.on('update-not-available', (info) => {
+    mainWindow?.webContents.send('update:not-available', info)
+  })
+
+  // 下载进度
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('update:download-progress', progress)
+  })
+
+  // 下载完成
+  autoUpdater.on('update-downloaded', (info) => {
+    mainWindow?.webContents.send('update:downloaded', info)
+  })
+
+  // 错误处理
+  autoUpdater.on('error', (error) => {
+    mainWindow?.webContents.send('update:error', error.message)
+  })
 }
 
 // =================== 数据库持久化 ===================
@@ -284,12 +462,27 @@ function saveDatabase() {
 // =================== 应用生命周期 ===================
 
 app.whenReady().then(async () => {
-  // 初始化数据库
+  // 1. 初始化数据库
   dbPath = path.join(app.getPath('userData'), 'heima-accounting.db')
   await initDatabase(dbPath)
 
+  // 2. 注册 IPC
   setupIPC()
+
+  // 3. 注册自动更新事件转发
+  setupAutoUpdater()
+
+  // 4. 创建窗口
   createWindow()
+
+  // 5. 后台静默检查更新（仅生产模式，不阻塞窗口显示）
+  if (app.isPackaged) {
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = true
+    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+      console.log('更新检查失败（可能无网络）:', err.message)
+    })
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

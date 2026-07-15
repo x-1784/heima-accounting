@@ -1,10 +1,14 @@
 {
   "name": "heima-accounting",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "黑马记账 — 个人记账桌面应用",
   "main": "dist/main/index.js",
   "author": "黑马记账",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/X-1784/heima-accounting"
+  },
   "scripts": {
     "dev": "concurrently -n main,renderer \"npm run dev:main\" \"npm run dev:renderer\"",
     "dev:main": "tsc -p tsconfig.node.json && env -u ELECTRON_RUN_AS_NODE electron .",
@@ -21,6 +25,7 @@
     "@ant-design/icons": "^5.5.0",
     "antd": "^5.22.0",
     "dayjs": "^1.11.13",
+    "electron-updater": "^6.8.9",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "sql.js": "^1.11.0"
