@@ -25,3 +25,7 @@ mac:
         - x64
         - arm64
   artifactName: ${productName}-${version}-macOS.${ext}
+publish:
+  provider: github
+  owner: X-1784
+  repo: heima-accounting

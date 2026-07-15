@@ -40,6 +40,16 @@ interface ElectronAPI {
   exportCSV: (month?: string) => Promise<{ success: boolean; path: string | null }>
   getBudget: (month: string) => Promise<{ month: string; amount: number } | null>
   setBudget: (month: string, amount: number) => Promise<{ success: boolean }>
+
+  // ========== 自动更新 ==========
+  onUpdateAvailable: (callback: (info: { version: string }) => void) => void
+  onUpdateNotAvailable: (callback: (info: any) => void) => void
+  onDownloadProgress: (callback: (progress: { percent: number }) => void) => void
+  onUpdateDownloaded: (callback: (info: { version: string }) => void) => void
+  onUpdateError: (callback: (message: string) => void) => void
+  checkForUpdates: () => Promise<any>
+  downloadUpdate: () => Promise<{ success: boolean; message?: string }>
+  installUpdate: () => Promise<{ success: boolean }>
 }
 
 declare global {

@@ -736,6 +736,14 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('expense')
   const [triggerAdd, setTriggerAdd] = useState(0)
 
+  // ========== 自动更新状态 ==========
+  const [updateModalOpen, setUpdateModalOpen] = useState(false)
+  const [updateVersion, setUpdateVersion] = useState('')
+  const [updateDownloading, setUpdateDownloading] = useState(false)
+  const [updateDownloaded, setUpdateDownloaded] = useState(false)
+  const [updateProgress, setUpdateProgress] = useState(0)
+  const [updateError, setUpdateError] = useState('')
+
   // 加载支出列表数据
   const loadExpenses = useCallback(async () => {
     if (!window.electronAPI) return
@@ -779,6 +787,35 @@ const App: React.FC = () => {
     loadExpenses()
     loadStats()
   }, [selectedMonth])
+
+  // 监听自动更新事件
+  useEffect(() => {
+    if (!window.electronAPI) return
+
+    window.electronAPI.onUpdateAvailable((info) => {
+      setUpdateVersion(info.version)
+      setUpdateModalOpen(true)
+    })
+
+    window.electronAPI.onDownloadProgress((progress) => {
+      setUpdateProgress(progress.percent)
+    })
+
+    window.electronAPI.onUpdateDownloaded((info) => {
+      setUpdateDownloading(false)
+      setUpdateDownloaded(true)
+      setUpdateVersion(info.version)
+    })
+
+    window.electronAPI.onUpdateError((message) => {
+      setUpdateDownloading(false)
+      setUpdateError(message)
+    })
+
+    window.electronAPI.onUpdateNotAvailable(() => {
+      // 静默忽略，仅手动检查时有用
+    })
+  }, [])
 
   // 点击"记一笔"按钮
   const handleAddClick = () => {
@@ -854,6 +891,27 @@ const App: React.FC = () => {
             }}
             allowClear={false}
           />
+          <Button
+            type="text"
+            size="small"
+            onClick={async () => {
+              try {
+                message.loading({ content: '正在检查更新...', key: 'updateCheck' })
+                const result = await window.electronAPI.checkForUpdates()
+                message.destroy('updateCheck')
+                if (result && result.updateInfo && result.updateInfo.version) {
+                  // 有更新时 autoUpdater 事件会自动弹出弹窗
+                } else {
+                  message.success({ content: '已是最新版本', key: 'updateCheck' })
+                }
+              } catch {
+                message.destroy('updateCheck')
+                message.warning({ content: '检查更新失败，请检查网络连接', key: 'updateCheck' })
+              }
+            }}
+          >
+            检查更新
+          </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAddClick} size="large">
             记一笔
           </Button>
@@ -873,6 +931,105 @@ const App: React.FC = () => {
           style={{ background: '#fff', padding: '0 24px 24px', borderRadius: 8 }}
         />
       </Content>
+
+      {/* ========== 自动更新弹窗 ========== */}
+      <Modal
+        title="发现新版本"
+        open={updateModalOpen}
+        onCancel={() => {
+          if (!updateDownloading) setUpdateModalOpen(false)
+        }}
+        closable={!updateDownloading}
+        maskClosable={false}
+        footer={
+          updateError ? (
+            <Button onClick={() => setUpdateModalOpen(false)}>稍后再说</Button>
+          ) : updateDownloaded ? (
+            <Button
+              type="primary"
+              onClick={async () => {
+                try {
+                  await window.electronAPI.installUpdate()
+                } catch {
+                  message.error('安装失败，请重试')
+                }
+              }}
+            >
+              立即安装并重启
+            </Button>
+          ) : updateDownloading ? (
+            <Button disabled>下载中...</Button>
+          ) : (
+            <Space>
+              <Button onClick={() => setUpdateModalOpen(false)}>稍后再说</Button>
+              <Button
+                type="primary"
+                onClick={async () => {
+                  setUpdateDownloading(true)
+                  setUpdateError('')
+                  const result = await window.electronAPI.downloadUpdate()
+                  if (!result.success) {
+                    setUpdateError(result.message || '下载失败')
+                    setUpdateDownloading(false)
+                  }
+                }}
+              >
+                立即更新
+              </Button>
+            </Space>
+          )
+        }
+        width={480}
+      >
+        <div style={{ padding: '12px 0' }}>
+          {updateError ? (
+            <div style={{ color: '#ff4d4f' }}>
+              <p>更新失败：{updateError}</p>
+              <p style={{ color: '#999', fontSize: 12, marginTop: 8 }}>
+                请检查网络连接后重试
+              </p>
+            </div>
+          ) : updateDownloading ? (
+            <div>
+              <p style={{ marginBottom: 16 }}>
+                正在下载 v{updateVersion} 版本，请稍候...
+              </p>
+              <div style={{ height: 6, background: '#f0f0f0', borderRadius: 3 }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${updateProgress}%`,
+                    background: '#1677ff',
+                    borderRadius: 3,
+                    transition: 'width 0.3s',
+                  }}
+                />
+              </div>
+              <p style={{ textAlign: 'center', color: '#999', marginTop: 8, fontSize: 12 }}>
+                {updateProgress.toFixed(1)}%
+              </p>
+            </div>
+          ) : updateDownloaded ? (
+            <div>
+              <p style={{ color: '#52c41a', fontWeight: 500 }}>
+                新版本 v{updateVersion} 已下载完成！
+              </p>
+              <p style={{ color: '#999', fontSize: 13, marginTop: 8 }}>
+                点击下方按钮将自动重启应用并完成更新。
+              </p>
+            </div>
+          ) : (
+            <div>
+              <p style={{ marginBottom: 8 }}>
+                检测到新版本 <Tag color="blue">v{updateVersion}</Tag>，是否立即更新？
+              </p>
+              <p style={{ color: '#999', fontSize: 13 }}>
+                更新不会影响您的记账数据，请放心操作。
+              </p>
+            </div>
+          )}
+        </div>
+      </Modal>
     </Layout>
   )
 }

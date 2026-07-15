@@ -1,6 +1,7 @@
 import electron = require('electron')
 import path = require('path')
 import { initDatabase, getDB } from './database'
+import { autoUpdater } from 'electron-updater'
 
 const { app, BrowserWindow, ipcMain, dialog } = electron
 
@@ -265,6 +266,63 @@ function setupIPC() {
     saveDatabase()
     return { success: true }
   })
+
+  // ========== 自动更新 ==========
+
+  /** 开始下载更新 */
+  ipcMain.handle('update:download', async () => {
+    try {
+      await autoUpdater.downloadUpdate()
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, message: err.message }
+    }
+  })
+
+  /** 安装更新并重启应用 */
+  ipcMain.handle('update:install', async () => {
+    autoUpdater.quitAndInstall()
+    return { success: true }
+  })
+
+  /** 手动检查更新 */
+  ipcMain.handle('update:check', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates()
+      return result
+    } catch (err: any) {
+      throw new Error(err.message)
+    }
+  })
+}
+
+// =================== 自动更新事件转发 ===================
+
+function setupAutoUpdater() {
+  // 发现新版本时通知渲染进程
+  autoUpdater.on('update-available', (info) => {
+    mainWindow?.webContents.send('update:available', info)
+  })
+
+  // 没有新版本时通知
+  autoUpdater.on('update-not-available', (info) => {
+    mainWindow?.webContents.send('update:not-available', info)
+  })
+
+  // 下载进度
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('update:download-progress', progress)
+  })
+
+  // 下载完成
+  autoUpdater.on('update-downloaded', (info) => {
+    mainWindow?.webContents.send('update:downloaded', info)
+  })
+
+  // 错误处理
+  autoUpdater.on('error', (error) => {
+    mainWindow?.webContents.send('update:error', error.message)
+  })
 }
 
 // =================== 数据库持久化 ===================
@@ -284,12 +342,27 @@ function saveDatabase() {
 // =================== 应用生命周期 ===================
 
 app.whenReady().then(async () => {
-  // 初始化数据库
+  // 1. 初始化数据库
   dbPath = path.join(app.getPath('userData'), 'heima-accounting.db')
   await initDatabase(dbPath)
 
+  // 2. 注册 IPC
   setupIPC()
+
+  // 3. 注册自动更新事件转发
+  setupAutoUpdater()
+
+  // 4. 创建窗口
   createWindow()
+
+  // 5. 后台静默检查更新（仅生产模式，不阻塞窗口显示）
+  if (app.isPackaged) {
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = true
+    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+      console.log('更新检查失败（可能无网络）:', err.message)
+    })
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
