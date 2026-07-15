@@ -96,4 +96,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** 安装更新并重启 */
   installUpdate: () => ipcRenderer.invoke('update:install'),
+
+  // ========== 分类管理 ==========
+
+  /** 获取所有用户自定义分类 */
+  getUserCategories: () => ipcRenderer.invoke('category:getAll'),
+
+  /** 添加用户自定义分类 */
+  addUserCategory: (data: { category_l1: string; emoji?: string; children: string[] }) =>
+    ipcRenderer.invoke('category:add', data),
+
+  /** 更新用户自定义分类 */
+  updateUserCategory: (data: { id: number; category_l1?: string; emoji?: string; children?: string[] }) =>
+    ipcRenderer.invoke('category:update', data),
+
+  /** 删除用户自定义分类 */
+  deleteUserCategory: (id: number) => ipcRenderer.invoke('category:delete', id),
 })

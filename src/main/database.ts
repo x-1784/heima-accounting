@@ -49,6 +49,17 @@ export async function initDatabase(dbPath: string): Promise<void> {
     )
   `)
 
+  // 创建用户自定义分类表
+  db.run(`
+    CREATE TABLE IF NOT EXISTS user_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category_l1 TEXT NOT NULL UNIQUE,
+      emoji TEXT DEFAULT '📌',
+      children TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `)
+
   // 保存到磁盘
   saveToDisk(dbPath)
 }

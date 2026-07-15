@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Layout,
   Button,
@@ -29,6 +29,7 @@ import {
   WalletOutlined,
   PieChartOutlined,
   BarChartOutlined,
+  TagsOutlined,
 } from '@ant-design/icons'
 import { Pie, Column } from '@ant-design/charts'
 import dayjs, { Dayjs } from 'dayjs'
@@ -43,7 +44,7 @@ interface CategoryItem {
   children: string[]
 }
 
-const categories: Record<string, CategoryItem> = {
+const presetCategories: Record<string, CategoryItem> = {
   '餐饮美食': {
     label: '🍜 餐饮美食',
     children: ['早餐', '午餐', '晚餐', '零食饮料', '外出聚餐', '食材采购'],
@@ -85,11 +86,6 @@ const categories: Record<string, CategoryItem> = {
     children: ['快递物流', '其他杂项'],
   },
 }
-
-const categoryL1Options = Object.entries(categories).map(([key, val]) => ({
-  value: key,
-  label: val.label,
-}))
 
 // ==================== 颜色映射 ====================
 
@@ -134,6 +130,7 @@ interface ExpenseTabProps {
   loading: boolean
   selectedMonth: string
   monthlyTotal: number
+  categories: Record<string, CategoryItem>
   onRefresh: () => void
   /** 外部触发的添加弹窗信号 */
   triggerAdd: number
@@ -146,6 +143,7 @@ const ExpenseTab: React.FC<ExpenseTabProps> = ({
   loading,
   selectedMonth,
   monthlyTotal,
+  categories,
   onRefresh,
   triggerAdd,
   onTriggerAddHandled,
@@ -288,7 +286,16 @@ const ExpenseTab: React.FC<ExpenseTabProps> = ({
     form.setFieldsValue({ category_l2: undefined })
   }
 
+  // 二级分类选项（根据一级联动）
   const selectedL1: string | undefined = Form.useWatch('category_l1', form)
+  const categoryL1Options = useMemo(
+    () =>
+      Object.entries(categories).map(([key, val]) => ({
+        value: key,
+        label: val.label,
+      })),
+    [categories]
+  )
   const categoryL2Options = selectedL1
     ? categories[selectedL1]?.children.map((c) => ({ value: c, label: c })) || []
     : []
@@ -564,9 +571,10 @@ interface StatsTabProps {
   monthlyTrend: MonthlyTrend[]
   selectedMonth: string
   loading: boolean
+  categories: Record<string, CategoryItem>
 }
 
-const StatsTab: React.FC<StatsTabProps> = ({ categoryStats, monthlyTrend, selectedMonth, loading }) => {
+const StatsTab: React.FC<StatsTabProps> = ({ categoryStats, monthlyTrend, selectedMonth, loading, categories }) => {
   // 饼图配置
   const pieConfig = {
     data: categoryStats.map((item) => ({
@@ -744,6 +752,39 @@ const App: React.FC = () => {
   const [updateProgress, setUpdateProgress] = useState(0)
   const [updateError, setUpdateError] = useState('')
 
+  // ========== 分类管理状态 ==========
+  const [userCategories, setUserCategories] = useState<UserCategory[]>([])
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false)
+  const [editingUserCategory, setEditingUserCategory] = useState<UserCategory | null>(null)
+  const [categoryForm] = Form.useForm()
+  const [categorySubItems, setCategorySubItems] = useState<string[]>([''])
+  const [categorySaving, setCategorySaving] = useState(false)
+  const [categoryFormOpen, setCategoryFormOpen] = useState(false)
+
+  // 合并预置分类 + 用户自定义分类
+  const allCategories: Record<string, CategoryItem> = useMemo(() => {
+    const userMap: Record<string, CategoryItem> = {}
+    for (const uc of userCategories) {
+      userMap[uc.category_l1] = {
+        label: `${uc.emoji || '📌'} ${uc.category_l1}`,
+        children: uc.children,
+      }
+    }
+    // 预置优先，用户分类不覆盖同名预置
+    return { ...userMap, ...presetCategories }
+  }, [userCategories])
+
+  // 加载用户自定义分类
+  const loadUserCategories = useCallback(async () => {
+    if (!window.electronAPI) return
+    try {
+      const data = await window.electronAPI.getUserCategories()
+      setUserCategories(data || [])
+    } catch (err) {
+      console.error('加载分类失败:', err)
+    }
+  }, [])
+
   // 加载支出列表数据
   const loadExpenses = useCallback(async () => {
     if (!window.electronAPI) return
@@ -787,6 +828,11 @@ const App: React.FC = () => {
     loadExpenses()
     loadStats()
   }, [selectedMonth])
+
+  // 加载用户自定义分类
+  useEffect(() => {
+    loadUserCategories()
+  }, [loadUserCategories])
 
   // 监听自动更新事件
   useEffect(() => {
@@ -832,6 +878,111 @@ const App: React.FC = () => {
     }
   }
 
+  // ========== 分类管理相关处理 ==========
+
+  // 打开添加分类弹窗
+  const openAddCategory = () => {
+    setEditingUserCategory(null)
+    categoryForm.resetFields()
+    setCategorySubItems([''])
+    setCategoryFormOpen(true)
+  }
+
+  // 打开编辑分类弹窗
+  const openEditCategory = (cat: UserCategory) => {
+    setEditingUserCategory(cat)
+    categoryForm.setFieldsValue({
+      category_l1: cat.category_l1,
+      emoji: cat.emoji,
+    })
+    setCategorySubItems(cat.children.length > 0 ? [...cat.children] : [''])
+    setCategoryFormOpen(true)
+  }
+
+  // 提交分类表单（新增或编辑）
+  const handleCategorySubmit = async () => {
+    try {
+      const values = await categoryForm.validateFields()
+      // 过滤掉空的二级分类
+      const children = categorySubItems.filter((s) => s.trim() !== '')
+      if (children.length === 0) {
+        message.warning('请至少添加一个二级分类')
+        return
+      }
+
+      setCategorySaving(true)
+      if (editingUserCategory) {
+        // 编辑
+        const result = await window.electronAPI.updateUserCategory({
+          id: editingUserCategory.id,
+          category_l1: values.category_l1?.trim(),
+          emoji: values.emoji?.trim(),
+          children,
+        })
+        if (result.success) {
+          message.success('分类已更新')
+          setCategoryFormOpen(false)
+          setEditingUserCategory(null)
+          loadUserCategories()
+        } else {
+          message.warning(result.message || '更新失败')
+        }
+      } else {
+        // 新增
+        const result = await window.electronAPI.addUserCategory({
+          category_l1: values.category_l1?.trim(),
+          emoji: values.emoji?.trim(),
+          children,
+        })
+        if (result.success) {
+          message.success('分类已添加')
+          setCategoryFormOpen(false)
+          setEditingUserCategory(null)
+          loadUserCategories()
+        } else {
+          message.warning(result.message || '添加失败')
+        }
+      }
+    } catch (err) {
+      // 表单验证失败
+    } finally {
+      setCategorySaving(false)
+    }
+  }
+
+  // 删除用户分类
+  const handleDeleteCategory = (cat: UserCategory) => {
+    Modal.confirm({
+      title: `确定删除"${cat.category_l1}"分类吗？`,
+      content: '删除后已有记账记录不受影响，仍保留原分类名称。',
+      okText: '确定删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        await window.electronAPI.deleteUserCategory(cat.id)
+        message.success('分类已删除')
+        loadUserCategories()
+      },
+    })
+  }
+
+  // 二级分类子项操作
+  const addSubItem = () => setCategorySubItems([...categorySubItems, ''])
+  const removeSubItem = (index: number) => {
+    if (categorySubItems.length <= 1) {
+      message.warning('至少保留一个二级分类')
+      return
+    }
+    const next = [...categorySubItems]
+    next.splice(index, 1)
+    setCategorySubItems(next)
+  }
+  const updateSubItem = (index: number, value: string) => {
+    const next = [...categorySubItems]
+    next[index] = value
+    setCategorySubItems(next)
+  }
+
   const tabItems = [
     {
       key: 'expense',
@@ -842,6 +993,7 @@ const App: React.FC = () => {
           loading={loading}
           selectedMonth={selectedMonth}
           monthlyTotal={monthlyTotal}
+          categories={allCategories}
           onRefresh={loadExpenses}
           triggerAdd={triggerAdd}
           onTriggerAddHandled={() => setTriggerAdd(0)}
@@ -857,6 +1009,7 @@ const App: React.FC = () => {
           monthlyTrend={monthlyTrend}
           selectedMonth={selectedMonth}
           loading={statsLoading}
+          categories={allCategories}
         />
       ),
     },
@@ -911,6 +1064,14 @@ const App: React.FC = () => {
             }}
           >
             检查更新
+          </Button>
+          <Button
+            type="text"
+            size="small"
+            icon={<TagsOutlined />}
+            onClick={() => setCategoryModalOpen(true)}
+          >
+            管理分类
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAddClick} size="large">
             记一笔
@@ -1029,6 +1190,168 @@ const App: React.FC = () => {
             </div>
           )}
         </div>
+      </Modal>
+
+      {/* ========== 分类管理弹窗 ========== */}
+      <Modal
+        title="管理分类"
+        open={categoryModalOpen}
+        onCancel={() => {
+          setCategoryModalOpen(false)
+          setEditingUserCategory(null)
+          setCategoryFormOpen(false)
+        }}
+        width={600}
+        footer={null}
+        destroyOnClose
+      >
+        <div style={{ padding: '8px 0' }}>
+          {/* 预置分类 */}
+          <div style={{ marginBottom: 20 }}>
+            <Text strong style={{ fontSize: 13, color: '#999' }}>📌 预置分类（不可修改）</Text>
+            <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {Object.entries(presetCategories).map(([key, val]) => (
+                <Tag
+                  key={key}
+                  color="default"
+                  style={{ padding: '4px 10px', fontSize: 13, opacity: 0.85 }}
+                >
+                  🔒 {val.label}（{val.children.length}个小类）
+                </Tag>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ height: 1, background: '#f0f0f0', margin: '16px 0' }} />
+
+          {/* 用户自定义分类 */}
+          <div style={{ marginBottom: 16 }}>
+            <Text strong style={{ fontSize: 13, color: '#999' }}>✏️ 自定义分类</Text>
+            {userCategories.length === 0 ? (
+              <div style={{ marginTop: 8, color: '#ccc', fontSize: 13 }}>
+                暂无自定义分类，点击下方按钮添加
+              </div>
+            ) : (
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {userCategories.map((cat) => (
+                  <Card
+                    key={cat.id}
+                    size="small"
+                    style={{
+                      border: '1px solid #f0f0f0',
+                      borderRadius: 6,
+                    }}
+                    styles={{ body: { padding: '10px 14px' } }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div>
+                        <Text strong style={{ fontSize: 14 }}>
+                          {cat.emoji} {cat.category_l1}
+                        </Text>
+                        <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                          {cat.children.length}个小类
+                        </Text>
+                      </div>
+                      <Space size={4}>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<EditOutlined />}
+                          onClick={() => openEditCategory(cat)}
+                        />
+                        <Popconfirm
+                          title="确定删除此分类？"
+                          description="已有记账记录不受影响"
+                          onConfirm={() => handleDeleteCategory(cat)}
+                          okText="确定删除"
+                          cancelText="取消"
+                          okButtonProps={{ danger: true }}
+                        >
+                          <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                        </Popconfirm>
+                      </Space>
+                    </div>
+                    <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {cat.children.map((child, i) => (
+                        <Tag key={i} color="blue" style={{ fontSize: 12 }}>
+                          {child}
+                        </Tag>
+                      ))}
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 添加分类按钮 */}
+          <Button
+            type="dashed"
+            block
+            icon={<PlusOutlined />}
+            onClick={openAddCategory}
+          >
+            添加分类
+          </Button>
+        </div>
+      </Modal>
+
+      {/* ========== 添加/编辑分类弹窗 ========== */}
+      <Modal
+        title={editingUserCategory ? '编辑分类' : '添加分类'}
+        open={categoryFormOpen}
+        onCancel={() => {
+          setCategoryFormOpen(false)
+          setEditingUserCategory(null)
+          categoryForm.resetFields()
+          setCategorySubItems([''])
+        }}
+        onOk={handleCategorySubmit}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={categorySaving}
+        destroyOnClose
+      >
+        <Form form={categoryForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item
+            name="category_l1"
+            label="一级分类名称"
+            rules={[
+              { required: true, message: '请输入一级分类名称' },
+              { max: 20, message: '分类名称不能超过20个字' },
+            ]}
+          >
+            <Input placeholder="例如：旅行、宠物、兴趣爱好" />
+          </Form.Item>
+          <Form.Item name="emoji" label="图标（可选，输入1个emoji）">
+            <Input placeholder="📌" maxLength={2} style={{ width: 120 }} />
+          </Form.Item>
+          <Form.Item label="二级分类" required>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {categorySubItems.map((item, index) => (
+                <div key={index} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Input
+                    value={item}
+                    onChange={(e) => updateSubItem(index, e.target.value)}
+                    placeholder={`二级分类 ${index + 1}，例如：猫粮`}
+                    maxLength={15}
+                  />
+                  <Button
+                    type="text"
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => removeSubItem(index)}
+                    disabled={categorySubItems.length <= 1}
+                  />
+                </div>
+              ))}
+              <Button type="dashed" size="small" icon={<PlusOutlined />} onClick={addSubItem} style={{ alignSelf: 'flex-start' }}>
+                添加二级分类
+              </Button>
+            </div>
+          </Form.Item>
+        </Form>
       </Modal>
     </Layout>
   )
