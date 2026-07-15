@@ -751,6 +751,7 @@ const App: React.FC = () => {
   const [updateDownloaded, setUpdateDownloaded] = useState(false)
   const [updateProgress, setUpdateProgress] = useState(0)
   const [updateError, setUpdateError] = useState('')
+  const manualCheckRef = useRef(false)
 
   // ========== 分类管理状态 ==========
   const [userCategories, setUserCategories] = useState<UserCategory[]>([])
@@ -839,6 +840,8 @@ const App: React.FC = () => {
     if (!window.electronAPI) return
 
     window.electronAPI.onUpdateAvailable((info) => {
+      manualCheckRef.current = false
+      message.destroy('updateCheck')
       setUpdateVersion(info.version)
       setUpdateModalOpen(true)
     })
@@ -854,12 +857,17 @@ const App: React.FC = () => {
     })
 
     window.electronAPI.onUpdateError((message) => {
+      manualCheckRef.current = false
+      message.destroy('updateCheck')
       setUpdateDownloading(false)
       setUpdateError(message)
     })
 
     window.electronAPI.onUpdateNotAvailable(() => {
-      // 静默忽略，仅手动检查时有用
+      if (manualCheckRef.current) {
+        manualCheckRef.current = false
+        message.success({ content: '已是最新版本', key: 'updateCheck' })
+      }
     })
   }, [])
 
@@ -1049,15 +1057,11 @@ const App: React.FC = () => {
             size="small"
             onClick={async () => {
               try {
+                manualCheckRef.current = true
                 message.loading({ content: '正在检查更新...', key: 'updateCheck' })
-                const result = await window.electronAPI.checkForUpdates()
-                message.destroy('updateCheck')
-                if (result && result.updateInfo && result.updateInfo.version) {
-                  // 有更新时 autoUpdater 事件会自动弹出弹窗
-                } else {
-                  message.success({ content: '已是最新版本', key: 'updateCheck' })
-                }
+                await window.electronAPI.checkForUpdates()
               } catch {
+                manualCheckRef.current = false
                 message.destroy('updateCheck')
                 message.warning({ content: '检查更新失败，请检查网络连接', key: 'updateCheck' })
               }
