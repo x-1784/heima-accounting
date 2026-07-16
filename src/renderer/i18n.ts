@@ -13,6 +13,7 @@ interface Translations {
   'menu.statistics': string
   'menu.categories': string
   'menu.settings': string
+  'menu.snake': string
 
   // 首页
   'home.welcome': string
@@ -151,6 +152,17 @@ interface Translations {
   'update.checkNetwork': string
   'update.error': string
 
+  // 贪吃蛇
+  'snake.score': string
+  'snake.highScore': string
+  'snake.start': string
+  'snake.restart': string
+  'snake.pause': string
+  'snake.resume': string
+  'snake.gameOver': string
+  'snake.controlsDesc': string
+  'snake.spaceHint': string
+
   // 通用
   'common.save': string
   'common.cancel': string
@@ -185,6 +197,7 @@ const zhCN: Translations = {
   'menu.statistics': '统计分析',
   'menu.categories': '分类管理',
   'menu.settings': '设置',
+  'menu.snake': '🐍 贪吃蛇',
 
   'home.welcome': '欢迎使用黑马记账',
   'home.monthlyTotal': '本月支出',
@@ -303,6 +316,16 @@ const zhCN: Translations = {
   'settings.data': '数据',
   'settings.dbLocation': '数据存储在您的电脑本地，不会上传到任何服务器。',
 
+  'snake.score': '得分',
+  'snake.highScore': '最高分',
+  'snake.start': '开始游戏',
+  'snake.restart': '重新开始',
+  'snake.pause': '暂停',
+  'snake.resume': '继续',
+  'snake.gameOver': '游戏结束',
+  'snake.controlsDesc': '方向键控制蛇的移动',
+  'snake.spaceHint': '空格键暂停/继续',
+
   'update.title': '发现新版本',
   'update.found': '检测到新版本',
   'update.later': '稍后再说',
@@ -347,6 +370,7 @@ const enUS: Translations = {
   'menu.statistics': 'Statistics',
   'menu.categories': 'Categories',
   'menu.settings': 'Settings',
+  'menu.snake': '🐍 Snake',
 
   'home.welcome': 'Welcome to Heima Tracker',
   'home.monthlyTotal': 'Monthly Total',
@@ -464,6 +488,16 @@ const enUS: Translations = {
   'settings.checking': 'Checking for updates...',
   'settings.data': 'Data',
   'settings.dbLocation': 'Your data is stored locally on this computer.',
+
+  'snake.score': 'Score',
+  'snake.highScore': 'Best',
+  'snake.start': 'Start',
+  'snake.restart': 'Play Again',
+  'snake.pause': 'Paused',
+  'snake.resume': 'Resume',
+  'snake.gameOver': 'Game Over',
+  'snake.controlsDesc': 'Arrow keys to move',
+  'snake.spaceHint': 'Space to pause/resume',
 
   'update.title': 'New Version Available',
   'update.found': 'A new version has been detected',

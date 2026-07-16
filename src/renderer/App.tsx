@@ -595,9 +595,236 @@ const SettingsPage: React.FC<SettingsProps> = ({ onCheckUpdate, updateChecking }
   )
 }
 
+// ---------- 贪吃蛇 ----------
+
+const SNAKE_GRID = 20
+const SNAKE_CELL = 24
+const SNAKE_INITIAL_SPEED = 200
+const SNAKE_SPEED_INC = 5
+const SNAKE_MIN_SPEED = 60
+
+type Direction = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT'
+interface Point { x: number; y: number }
+
+const DIR: Record<Direction, Point> = {
+  UP: { x: 0, y: -1 }, DOWN: { x: 0, y: 1 },
+  LEFT: { x: -1, y: 0 }, RIGHT: { x: 1, y: 0 },
+}
+const OPPOSITE: Record<Direction, Direction> = {
+  UP: 'DOWN', DOWN: 'UP', LEFT: 'RIGHT', RIGHT: 'LEFT',
+}
+
+// 键盘映射提到模块顶层，避免每次按键都重新创建对象
+const KEY_MAP: Record<string, Direction> = {
+  ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+  w: 'UP', s: 'DOWN', a: 'LEFT', d: 'RIGHT',
+  W: 'UP', S: 'DOWN', A: 'LEFT', D: 'RIGHT',
+}
+
+/** 随机生成食物位置，棋盘满时返回 null */
+function randomFood(snake: Point[]): Point | null {
+  const occupied = new Set(snake.map(p => `${p.x},${p.y}`))
+  const available: Point[] = []
+  for (let x = 0; x < SNAKE_GRID; x++)
+    for (let y = 0; y < SNAKE_GRID; y++)
+      if (!occupied.has(`${x},${y}`)) available.push({ x, y })
+  if (available.length === 0) return null
+  return available[Math.floor(Math.random() * available.length)]
+}
+
+const SnakeGamePage: React.FC = () => {
+  const { t } = useTranslation()
+
+  // refs 用于游戏循环内读取最新值，避免 setInterval/setTimeout 的 stale closure 问题
+  const snakeRef = useRef<Point[]>([])
+  const foodRef = useRef<Point>({ x: 10, y: 10 })
+  const directionRef = useRef<Direction>('RIGHT')
+  const nextDirRef = useRef<Direction>('RIGHT')
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const speedRef = useRef(SNAKE_INITIAL_SPEED)
+  const bestRef = useRef(0)
+
+  const [snake, setSnake] = useState<Point[]>([])
+  const [food, setFood] = useState<Point>({ x: 10, y: 10 })
+  const [running, setRunning] = useState(false)
+  const [paused, setPaused] = useState(false)
+  const [gameOver, setGameOver] = useState(false)
+  const [best, setBest] = useState(() => {
+    try { return parseInt(localStorage.getItem('snake-best') || '0', 10) } catch { return 0 }
+  })
+
+  // 同步 best 到 ref，避免回调依赖 stale state
+  useEffect(() => { bestRef.current = best }, [best])
+
+  // score 从 snake 长度推导，无需单独维护状态
+  const score = snake.length > 0 ? snake.length - 3 : 0
+
+  const init = useCallback(() => {
+    const s: Point[] = [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }]
+    snakeRef.current = s; directionRef.current = 'RIGHT'; nextDirRef.current = 'RIGHT'
+    speedRef.current = SNAKE_INITIAL_SPEED
+    const f = randomFood(s)
+    if (!f) return // 不会发生（初始蛇只占3格，棋盘远未满）
+    foodRef.current = f
+    setSnake([...s]); setFood({ ...f })
+    setGameOver(false); setPaused(false); setRunning(true)
+  }, [])
+
+  const stop = useCallback(() => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+  }, [])
+
+  const endGame = useCallback(() => {
+    stop(); setRunning(false); setGameOver(true)
+    const s = snakeRef.current.length - 3
+    if (s > bestRef.current) {
+      setBest(s)
+      try { localStorage.setItem('snake-best', String(s)) } catch {}
+    }
+  }, [stop]) // bestRef 不是 state，引用保持稳定
+
+  const tick = useCallback(() => {
+    const dir = nextDirRef.current; directionRef.current = dir
+    const head = snakeRef.current[0]
+    const nh: Point = { x: head.x + DIR[dir].x, y: head.y + DIR[dir].y }
+
+    if (nh.x < 0 || nh.x >= SNAKE_GRID || nh.y < 0 || nh.y >= SNAKE_GRID) { endGame(); return }
+    const body = snakeRef.current.slice(0, -1)
+    if (body.some(p => p.x === nh.x && p.y === nh.y)) { endGame(); return }
+
+    const ate = nh.x === foodRef.current.x && nh.y === foodRef.current.y
+    const ns = [nh, ...snakeRef.current]
+    if (!ate) ns.pop()
+
+    snakeRef.current = ns; setSnake(ns) // ns 已是新数组引用，无需再 [...ns] 拷贝
+
+    if (ate) {
+      const nf = randomFood(ns)
+      if (!nf) { endGame(); return } // 棋盘满了，通关！
+      foodRef.current = nf; setFood({ ...nf })
+      speedRef.current = Math.max(SNAKE_MIN_SPEED, speedRef.current - SNAKE_SPEED_INC)
+    }
+  }, [endGame])
+
+  // 游戏循环：递归 setTimeout，速度通过 ref 读取，无需作为 effect 依赖
+  useEffect(() => {
+    if (!running || paused) {
+      if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+      return
+    }
+    const run = () => {
+      tick()
+      timerRef.current = setTimeout(run, speedRef.current)
+    }
+    timerRef.current = setTimeout(run, speedRef.current)
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
+  }, [running, paused, tick])
+
+  // 键盘
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const newDir = KEY_MAP[e.key]
+      // 仅游戏运行中才拦截方向键，避免阻止页面正常滚动
+      if (newDir && running && OPPOSITE[newDir] !== directionRef.current) {
+        e.preventDefault(); nextDirRef.current = newDir
+      }
+      if (e.key === ' ' && running) { e.preventDefault(); setPaused(p => !p) }
+    }
+    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h)
+  }, [running])
+
+  useEffect(() => { return () => { if (timerRef.current) clearTimeout(timerRef.current) } }, [])
+
+  // 遮罩层：三个互斥状态合并为一个，消除重复样式
+  const showOverlay = !running || paused
+  const overlayState: 'init' | 'over' | 'paused' = paused ? 'paused' : gameOver ? 'over' : 'init'
+
+  return (
+    <div>
+      <div style={pageTitleStyle}>🐍 {t('menu.snake')}</div>
+      <Card>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 40, marginBottom: 18 }}>
+          <Statistic title={t('snake.score')} value={score} valueStyle={{ color: '#1677ff', fontSize: 22 }} />
+          <Statistic title={t('snake.highScore')} value={best} valueStyle={{ color: '#52c41a', fontSize: 22 }} />
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+          <div style={{
+            position: 'relative', width: SNAKE_GRID * SNAKE_CELL, height: SNAKE_GRID * SNAKE_CELL,
+            border: '2px solid #d9d9d9', borderRadius: 6, background: '#1a1a2e', overflow: 'hidden',
+            // CSS 渐变绘制网格线（替代 400 个 div）
+            backgroundImage: `
+              linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)
+            `,
+            backgroundSize: `${SNAKE_CELL}px ${SNAKE_CELL}px`,
+          }}>
+            {/* 蛇 */}
+            {snake.map((p, i) => (
+              <div key={`s-${i}`} style={{
+                position: 'absolute', left: p.x * SNAKE_CELL + 1, top: p.y * SNAKE_CELL + 1,
+                width: SNAKE_CELL - 2, height: SNAKE_CELL - 2,
+                borderRadius: i === 0 ? 6 : 4,
+                background: i === 0 ? '#95de64' : '#52c41a',
+                border: i === 0 ? '2px solid #b7eb8f' : '1px solid #73d13d',
+                boxShadow: i === 0 ? '0 0 8px rgba(82,196,26,0.4)' : 'none',
+              }} />
+            ))}
+
+            {/* 食物 */}
+            <div style={{
+              position: 'absolute', left: food.x * SNAKE_CELL + 2, top: food.y * SNAKE_CELL + 2,
+              width: SNAKE_CELL - 4, height: SNAKE_CELL - 4, borderRadius: '50%',
+              background: 'radial-gradient(circle at 35% 35%, #ff7875, #ff4d4f)',
+              boxShadow: '0 0 10px rgba(255,77,79,0.6)',
+            }} />
+
+            {/* 遮罩层（初始 / 游戏结束 / 暂停 — 三种状态合并为一个组件） */}
+            {showOverlay && (
+              <div style={{
+                position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
+              }}>
+                {overlayState === 'init' && (<>
+                  <div style={{ fontSize: 48 }}>🐍</div>
+                  <Button type="primary" size="large" onClick={init}>{t('snake.start')}</Button>
+                </>)}
+                {overlayState === 'over' && (<>
+                  <div style={{ color: '#fff', fontSize: 30, fontWeight: 800 }}>{t('snake.gameOver')}</div>
+                  <div style={{ color: '#ddd', fontSize: 16 }}>{t('snake.score')}: {score}</div>
+                  <Button type="primary" size="large" onClick={init}>{t('snake.restart')}</Button>
+                </>)}
+                {overlayState === 'paused' && (
+                  <div style={{ color: '#fff', fontSize: 28, fontWeight: 700 }}>{t('snake.pause')}</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ textAlign: 'center' }}>
+          <Space>
+            {running && !gameOver && (
+              <Button onClick={() => setPaused(p => !p)}>{paused ? t('snake.resume') : t('snake.pause')}</Button>
+            )}
+            {(gameOver || !running) && (
+              <Button type="primary" onClick={init}>{gameOver ? t('snake.restart') : t('snake.start')}</Button>
+            )}
+          </Space>
+          <div style={{ marginTop: 12 }}>
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              {t('snake.controlsDesc')}：↑ ↓ ← → &nbsp;|&nbsp; {t('snake.spaceHint')}
+            </Text>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
 // ==================== 主应用 ====================
 
-type PageKey = 'home' | 'add' | 'expenses' | 'stats' | 'categories' | 'settings'
+type PageKey = 'home' | 'add' | 'expenses' | 'stats' | 'categories' | 'snake' | 'settings'
 
 const App: React.FC = () => {
   const { t, lang } = useTranslation()
@@ -701,6 +928,7 @@ const App: React.FC = () => {
     { key: 'expenses', icon: <UnorderedListOutlined />, label: t('menu.expenses') },
     { key: 'stats', icon: <PieChartOutlined />, label: t('menu.statistics') },
     { key: 'categories', icon: <TagsOutlined />, label: t('menu.categories') },
+    { key: 'snake', icon: <span style={{ fontSize: 16 }}>🐍</span>, label: t('menu.snake') },
     { key: 'settings', icon: <SettingOutlined />, label: t('menu.settings') },
   ]
 
@@ -717,6 +945,8 @@ const App: React.FC = () => {
         return <StatsPage categoryStats={categoryStats} monthlyTrend={monthlyTrend} selectedMonth={selectedMonth} loading={statsLoading} categories={allCategories} />
       case 'categories':
         return <CategoryPage userCategories={userCategories} onRefresh={loadUserCategories} />
+      case 'snake':
+        return <SnakeGamePage />
       case 'settings':
         return <SettingsPage onCheckUpdate={handleCheckUpdate} updateChecking={updateChecking} />
       default:
