@@ -1,0 +1,7 @@
+{
+  "passed": true,
+  "security": { "score": 9, "highRisk": 0, "mediumRisk": 0, "lowRisk": 1 },
+  "comments": { "score": 7 },
+  "structure": { "score": 5 },
+  "timestamp": "2026-07-18T03:34:23.750Z"
+}

@@ -535,7 +535,8 @@ const enUS: Translations = {
 
 // ==================== 语言包映射 ====================
 
-const locales: Record<Language, Translations> = {
+// 导出语言包映射,供单元测试检查中英文条目完整性
+export const locales: Record<Language, Translations> = {
   'zh-CN': zhCN,
   'en-US': enUS,
 }

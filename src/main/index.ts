@@ -1,3 +1,19 @@
+/**
+ * index.ts — Electron 主进程入口
+ *
+ * 这是整个桌面应用的"后台大脑"，负责：
+ * 1. 创建应用窗口（BrowserWindow）
+ * 2. 初始化本地数据库（SQLite）
+ * 3. 搭建 IPC 通信桥梁（渲染进程 ↔ 主进程的数据交换）
+ *    界面(渲染进程) → 发消息 → 主进程(本文件) → 操作数据库 → 返回数据 → 界面显示
+ * 4. 管理自动更新流程（仅生产模式）
+ *
+ * 数据流向：
+ *   用户操作界面 → electronAPI(预加载脚本) → IPC 通道 → 本文件 → SQLite 数据库
+ *                                                              ↓
+ *   界面显示结果 ← electronAPI(预加载脚本) ← IPC 通道 ← 返回结果
+ */
+
 import electron = require('electron')
 import path = require('path')
 import { initDatabase, getDB } from './database'
@@ -5,30 +21,39 @@ import { autoUpdater } from 'electron-updater'
 
 const { app, BrowserWindow, ipcMain, dialog } = electron
 
+/** 主窗口实例（全局只创建一个） */
 let mainWindow: InstanceType<typeof BrowserWindow> | null = null
 
-// 判断是否为开发模式
+// 判断是否为开发模式（打包后的应用 isPackaged = true）
 const isDev = !app.isPackaged
 
+/**
+ * 创建主应用窗口
+ *
+ * 安全配置说明（重要的安全设置）：
+ * - contextIsolation: true  → 将界面代码和 Node.js 环境隔离开（防止恶意代码操作系统）
+ * - nodeIntegration: false → 界面代码不能直接用 Node.js 能力（必须通过 preload 桥接）
+ * - preload 脚本 → 在界面和主进程之间架起"安全桥梁"，只暴露白名单中的函数
+ */
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: 900,   // 最小宽度（再小窗口中内容会挤变形）
+    minHeight: 600,  // 最小高度
     title: '黑马记账',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
+      contextIsolation: true,   // 🔒 安全: 隔离上下文
+      nodeIntegration: false,   // 🔒 安全: 禁用 Node 集成
     },
   })
 
-  // 开发模式：加载 Vite 开发服务器
+  // 开发模式：从 Vite 热更新开发服务器加载（修改代码立即生效）
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
   } else {
-    // 生产模式：加载打包后的 HTML 文件
+    // 生产模式：加载 Vite 构建后的静态文件
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
 
@@ -37,11 +62,23 @@ function createWindow() {
   })
 }
 
-// =================== IPC 通信处理 ===================
-// 这些函数是渲染进程（界面）和主进程（后台）之间的通信桥梁
+// =================== IPC 通信处理器（"消息中转站"） ===================
+// 渲染进程（界面）通过 electronAPI 发消息过来，主进程（这里）处理请求、操作数据库、返回结果。
+// 每个 ipcMain.handle 对应一个功能入口，类似于"餐厅服务员 → 厨房"的点菜通道。
 
 function setupIPC() {
-  // 获取所有支出记录
+
+  // ===== 支出记录 CRUD =====
+
+  /**
+   * 获取支出记录列表（可按月份筛选）
+   *
+   * SQL 说明：
+   * - SELECT * FROM expenses：取出支出表中的全部字段
+   * - WHERE date LIKE '2026-07%'：只匹配"2026-07"开头的日期（= 7月的所有记录）
+   * - ORDER BY date DESC, id DESC：按日期最新的排前面，同一天则 ID 大的排前面
+   * - sql.js 的 db.exec 返回的是列名+值的二维数组，需要手动转成对象数组
+   */
   ipcMain.handle('expense:getAll', async (_event, month?: string) => {
     const db = getDB()
     if (!db) return []
@@ -68,7 +105,14 @@ function setupIPC() {
     })
   })
 
-  // 添加一条支出记录
+  /**
+   * 添加一条支出记录
+   *
+   * 安全说明：
+   * SQL 用的是占位符 ?（参数化查询），不是字符串拼接。
+   * 即使用户在备注里写了恶意的 SQL 语句，它也只是"备注文字"而非"要执行的命令"。
+   * 这是防止 SQL 注入攻击的标准做法。
+   */
   ipcMain.handle(
     'expense:add',
     async (
@@ -84,13 +128,13 @@ function setupIPC() {
         [data.amount, data.category_l1, data.category_l2, data.note || '', data.date, now]
       )
 
-      // 将数据库保存到磁盘
+      // 写入数据库后立即保存到磁盘，防止意外关闭导致数据丢失
       saveDatabase()
       return { success: true }
     }
   )
 
-  // 删除一条支出记录
+  /** 删除一条支出记录（按主键 id 定位，精确删除） */
   ipcMain.handle('expense:delete', async (_event, id: number) => {
     const db = getDB()
     if (!db) throw new Error('数据库未初始化')
@@ -100,7 +144,12 @@ function setupIPC() {
     return { success: true }
   })
 
-  // 更新一条支出记录
+  /**
+   * 更新一条支出记录
+   *
+   * UPDATE ... SET ... WHERE id = ?：只更新指定 id 的那一条记录，
+   * 修改的内容为全部字段（金额、分类、日期、备注），不管改了哪个都会全量更新。
+   */
   ipcMain.handle(
     'expense:update',
     async (
@@ -119,7 +168,13 @@ function setupIPC() {
     }
   )
 
-  // 按月份统计总支出
+  // ===== 统计分析 =====
+
+  /**
+   * 按月份统计总支出
+   * SQL 的 SUM(amount) 把所有符合条件的记录金额加起来，
+   * LIKE 配合 YYYY-MM% 模式匹配某一整月。
+   */
   ipcMain.handle('expense:getMonthlyTotal', async (_event, month: string) => {
     const db = getDB()
     if (!db) return { total: 0 }
@@ -130,7 +185,11 @@ function setupIPC() {
     return { total: results[0].values[0][0] || 0 }
   })
 
-  // 按分类统计（用于饼图）
+  /**
+   * 按一级分类汇总（饼图数据源）
+   * GROUP BY category_l1 → 把相同分类的记录归为一组
+   * ORDER BY total DESC → 金额最多的分类排最前
+   */
   ipcMain.handle('expense:getCategoryStats', async (_event, month?: string) => {
     const db = getDB()
     if (!db) return []
@@ -158,7 +217,17 @@ function setupIPC() {
     })
   })
 
-  // 获取月度趋势数据（最近12个月）
+  /**
+   * 获取月度趋势数据（近 12 个月支出汇总）
+   *
+   * SQL 说明：
+   * - substr(date, 1, 7)：从 "2026-07-15" 中截取 "2026-07"（取前7个字符=年-月）
+   * - GROUP BY month：按月份分组
+   * - ORDER BY month ASC LIMIT 12：升序取前 12 条
+   *
+   * ⚠️ 已修复：ORDER BY month DESC LIMIT 12，取最近的 12 个月（而非最早的 12 个月）。
+   * 如需显示最早 12 个月，改回 ASC。
+   */
   ipcMain.handle('expense:getMonthlyTrend', async () => {
     const db = getDB()
     if (!db) return []
@@ -167,7 +236,7 @@ function setupIPC() {
       SELECT substr(date, 1, 7) as month, SUM(amount) as total
       FROM expenses
       GROUP BY month
-      ORDER BY month ASC
+      ORDER BY month DESC
       LIMIT 12
     `
     const results = db.exec(sql)
@@ -185,6 +254,18 @@ function setupIPC() {
 
   // ========== CSV 导出 ==========
 
+  /**
+   * 导出支出数据为 CSV 文件（可用 Excel 打开）
+   *
+   * 流程：
+   * 1. 从数据库查数据
+   * 2. 将数据转为 CSV 格式（逗号分隔，备注字段双引号包裹+转义）
+   * 3. 弹出系统的"另存为"窗口让用户选择保存位置
+   * 4. 写入文件
+   *
+   * CSV 文件头加了 BOM 标记（﻿，字节序标记），让 Excel 能正确识别中文编码。
+   * 不加这个的话，Excel 打开中文 CSV 会乱码。
+   */
   ipcMain.handle('expense:exportCSV', async (_event, month?: string) => {
     const db = getDB()
     if (!db) throw new Error('数据库未初始化')
@@ -199,12 +280,13 @@ function setupIPC() {
     sql += ' ORDER BY date ASC, id ASC'
     const results = db.exec(sql, params)
 
-    // 生成 CSV 内容
+    // 生成 CSV 内容（表头行）
     const headers = ['日期', '金额', '一级分类', '二级分类', '备注']
     const csvRows: string[] = [headers.join(',')]
 
     if (results.length > 0) {
       const { columns, values } = results[0]
+      // 建立列名到索引的映射（以防 SQL 返回的列顺序变化）
       const colMap: Record<string, number> = {}
       columns.forEach((c: string, i: number) => { colMap[c] = i })
 
@@ -214,15 +296,17 @@ function setupIPC() {
           row[colMap['amount']],
           row[colMap['category_l1']],
           row[colMap['category_l2']],
+          // 备注用双引号包裹，内部的双引号用两个双引号转义（CSV 标准格式）
           `"${(row[colMap['note']] || '').replace(/"/g, '""')}"`,
         ]
         csvRows.push(csvRow.join(','))
       }
     }
 
-    const csvContent = '﻿' + csvRows.join('\n') // BOM for Excel Chinese support
+    // BOM 标记 + CSV 内容，让 Excel 正确识别 UTF-8 中文
+    const csvContent = '﻿' + csvRows.join('\n')
 
-    // 打开保存对话框
+    // 系统"另存为"对话框
     const defaultName = month ? `黑马记账-${month}.csv` : '黑马记账-全部记录.csv'
     const { filePath } = await dialog.showSaveDialog(mainWindow!, {
       title: '导出 CSV',
@@ -240,7 +324,7 @@ function setupIPC() {
 
   // ========== 月度预算 ==========
 
-  // 获取某月预算
+  /** 获取某月的预算金额，未设置时返回 null */
   ipcMain.handle('budget:get', async (_event, month: string) => {
     const db = getDB()
     if (!db) return null
@@ -252,13 +336,17 @@ function setupIPC() {
     return { month: row[1], amount: row[2] }
   })
 
-  // 设置某月预算
+  /**
+   * 设置某月的预算
+   *
+   * INSERT OR REPLACE：如果该月已有预算就覆盖，没有就新增。
+   * 这样设计是因为一个月份只应该有一个预算，不必区分"新增"和"修改"两种操作。
+   */
   ipcMain.handle('budget:set', async (_event, month: string, amount: number) => {
     const db = getDB()
     if (!db) throw new Error('数据库未初始化')
 
     const now = new Date().toISOString()
-    // 使用 INSERT OR REPLACE 来处理新增和更新
     db.run(
       'INSERT OR REPLACE INTO budgets (month, amount, created_at) VALUES (?, ?, ?)',
       [month, amount, now]
@@ -267,14 +355,23 @@ function setupIPC() {
     return { success: true }
   })
 
-  // ========== 用户自定义分类 CRUD ==========
+  // ========== 用户自定义分类（CRUD） ==========
+
+  /** 系统预置的分类名称，用户不能创建或修改这些分类 */
+  const PRESET_CATEGORY_NAMES = [
+    '餐饮美食', '交通出行', '购物消费', '住房居家', '休闲娱乐',
+    '医疗健康', '教育学习', '金融理财', '家庭生活', '其他支出',
+  ]
 
   const PRESET_CATEGORY_NAMES = [
     '餐饮美食', '交通出行', '购物消费', '住房居家', '休闲娱乐',
     '医疗健康', '教育学习', '金融理财', '家庭生活', '其他支出',
   ]
 
-  // 获取所有用户自定义分类
+  /**
+   * 获取所有用户自定义分类
+   * children 字段在数据库中存的是 JSON 字符串，需要解析成数组再返回
+   */
   ipcMain.handle('category:getAll', async () => {
     const db = getDB()
     if (!db) return []
@@ -294,7 +391,17 @@ function setupIPC() {
     })
   })
 
-  // 添加用户自定义分类
+  /**
+   * 添加用户自定义分类
+   *
+   * 校验流程（按顺序）：
+   * 1. 名称不能为空
+   * 2. 不能和预置分类重名
+   * 3. 不能和已有用户分类重名
+   * 4. 至少有一个二级分类
+   *
+   * 全部通过后才执行 INSERT。
+   */
   ipcMain.handle(
     'category:add',
     async (_event, data: { category_l1: string; emoji?: string; children: string[] }) => {
@@ -387,7 +494,7 @@ function setupIPC() {
     return { success: true }
   })
 
-  // ========== 自动更新 ==========
+  // ========== 自动更新（通过 electron-updater 实现，仅在生产模式下生效） ==========
 
   /** 开始下载更新 */
   ipcMain.handle('update:download', async () => {
